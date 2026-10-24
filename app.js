@@ -1,13 +1,18 @@
 (() => {
 'use strict';
-const PREVIEW = new URLSearchParams(location.search).get('preview') === '1';
+const params = new URLSearchParams(location.search);
+const PREVIEW = params.get('preview') === '1';
+const TEST_MODE = !PREVIEW && params.get('test') === '1';
+const PRIVATE_ROOT = TEST_MODE ? 'testPrivateEntries' : 'privateEntries';
+const STORY_ROOT = TEST_MODE ? 'testPublicStories' : 'publicStories';
+const POLL_ROOT = TEST_MODE ? 'testPolls' : 'polls';
 const config = window.DECEMBER_FIREBASE || {};
 const configured = !!(config.apiKey && config.authDomain && config.projectId && config.appId && !String(config.apiKey).includes('여기에'));
 const DEMO = PREVIEW || !configured;
 const STORE = PREVIEW ? 'coram-advent-2026-preview-firebase' : 'coram-advent-2026-local-firebase';
 // Firebase SDK is dynamically imported only in live mode. ?preview=1 works without credentials or network.
 const SDK = 'https://www.gstatic.com/firebasejs/13.1.0/';
-let fb=null, auth=null, db=null, authAPI=null, activeProfile=null, adminEnabled=false;
+let fb=null, auth=null, db=null, authAPI=null, activeProfile=null, adminEnabled=false, testEnabled=false;
 let adminEntries=[],adminFiltered=[],adminProfiles=new Map();
 const gifts = [
   {n:1,icon:'🎄',kind:'write',short:'첫 감사',title:'12월의 첫 번째 인사',tag:'우리의 따뜻한 시작',question:'올해 찬양팀과 함께하면서 가장 감사했던 순간은 언제였나요?',placeholder:'그날의 장면을 한두 문장으로 남겨 보세요…'},
@@ -63,9 +68,9 @@ function fromServer(r){
  if(r.kind==='mission')out.mission=r.mission;
  return out;
 }
-function ownPath(n){return fb.doc(db,'privateEntries',user.uid,'days',String(n));}
-function storyPath(n){return fb.doc(db,'publicStories',String(n),'posts',user.uid);}
-function votePath(n){return fb.doc(db,'polls',String(n),'votes',user.uid);}
+function ownPath(n){return fb.doc(db,PRIVATE_ROOT,user.uid,'days',String(n));}
+function storyPath(n){return fb.doc(db,STORY_ROOT,String(n),'posts',user.uid);}
+function votePath(n){return fb.doc(db,POLL_ROOT,String(n),'votes',user.uid);}
 function hasGoogleLogin(){return !!(user && !user.isAnonymous && user.providerData?.some(x=>x.providerId==='google.com'));}
 function updateAccountUI(){
  const btn=$('accountBtn'),admin=$('adminBtn'),name=$('memberName'),panel=$('identityPanel');
@@ -76,8 +81,8 @@ function updateAccountUI(){
   btn.textContent='Google 로그인';admin.hidden=true;name.hidden=true;
   panel.innerHTML='<b>👋 찬양팀원 여러분!</b> 참여하려면 Google 로그인 후 이름을 등록해 주세요. <strong>모든 제출 내용(퀴즈 답, 투표, 비공개 글·기도문 포함)과 작성자 이름·Google 이메일은 관리자에게 보입니다.</strong> 다른 일반 참가자는 공개 동의한 글과 투표 집계만 볼 수 있어요.';
  }else{
-  btn.textContent='로그아웃';name.hidden=false;name.textContent=(activeProfile?.name||'이름 등록 필요')+'님';admin.hidden=!adminEnabled;
-  panel.innerHTML='<b>🔐 기록 안내:</b> 관리자에게는 <strong>모든 퀴즈 선택·정답 여부, 투표 선택, 글·기도문·미션, 작성자 이름·Google 이메일</strong>이 보여요. 일반 팀원에게는 공개 동의한 글만 표시됩니다.';
+  btn.textContent='로그아웃';name.hidden=false;name.textContent=(activeProfile?.name||'이름 등록 필요')+'님';admin.hidden=!adminEnabled;admin.textContent=TEST_MODE?'테스트 관리자 📋':'관리자 📋';
+  panel.innerHTML=(TEST_MODE?'<b>🧪 실제 Firebase 테스트 모드</b> · 테스트 기록은 행사 기록과 분리되고 승인된 사람만 참여할 수 있습니다. ':'')+'<b>🔐 기록 안내:</b> 관리자에게는 <strong>모든 퀴즈 선택·정답 여부, 투표 선택, 글·기도문·미션, 작성자 이름·Google 이메일</strong>이 보여요. 일반 팀원에게는 공개 동의한 글만 표시됩니다.';
  }
 }
 async function initDatabase(){
@@ -113,23 +118,26 @@ async function googleLogin(){
 }
 async function signOutAccount(){
  if(!authAPI||!auth)return;
- await authAPI.signOut(auth);user=null;activeProfile=null;serverReady=false;adminEnabled=false;state={};
+ await authAPI.signOut(auth);user=null;activeProfile=null;serverReady=false;adminEnabled=false;testEnabled=false;state={};
  setStatus('Google 로그인 후 참여할 수 있어요','demo');updateAccountUI();updateUI();showToast('로그아웃했어요.');
 }
 async function loadAccount(){
  if(!hasGoogleLogin()){serverReady=false;updateAccountUI();return;}
- activeProfile=null;serverReady=false;adminEnabled=false;
+ activeProfile=null;serverReady=false;adminEnabled=false;testEnabled=false;
  try{
   const prof=await fb.getDoc(fb.doc(db,'profiles',user.uid));if(prof.exists())activeProfile=prof.data();
   const adminRef=await fb.getDoc(fb.doc(db,'admins',user.uid));adminEnabled=adminRef.exists()&&adminRef.data().enabled===true;
+  if(TEST_MODE){const testerRef=await fb.getDoc(fb.doc(db,'testers',user.uid));testEnabled=adminEnabled||(testerRef.exists()&&testerRef.data().enabled===true);
+   if(!testEnabled){setStatus('테스트 권한이 없습니다 · admins 또는 testers 등록 필요','error');updateAccountUI();updateUI();return;}
+  }
   if(!activeProfile){setStatus('이름 등록을 완료해 주세요','demo');updateAccountUI();updateUI();showProfileForm();return;}
   await loadMyEntries();
-  serverReady=true;setStatus('Firebase 연결됨 · '+activeProfile.name+'님으로 참여 중','online');
+  serverReady=true;setStatus((TEST_MODE?'🧪 Firebase 테스트 연결됨 · ':'Firebase 연결됨 · ')+activeProfile.name+'님으로 참여 중','online');
  }catch(e){serverReady=false;setStatus('데이터베이스 연결 오류 · 규칙을 확인해 주세요','error');showToast(e.message);console.error(e);}
  updateAccountUI();updateUI();
 }
 async function loadMyEntries(){
- const snap=await fb.getDocs(fb.collection(db,'privateEntries',user.uid,'days'));
+ const snap=await fb.getDocs(fb.collection(db,PRIVATE_ROOT,user.uid,'days'));
  state={};snap.forEach(d=>{const n=Number(d.id);if(n>=1&&n<=24)state[n]=fromServer(d.data());});
 }
 function showProfileForm(){
@@ -185,19 +193,21 @@ async function erase(n){
  delete state[n];updateUI();
 }
 function kstParts(){const result={};new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).forEach(p=>{if(p.type!=='literal')result[p.type]=Number(p.value)});return result;}
-function unlocked(n){if(PREVIEW)return true;const k=kstParts();if(k.year>2026)return true;if(k.year<2026||k.month<12)return false;if(k.year===2026&&k.month===12)return k.day>n||(k.day===n&&k.hour>=8);return false;}
+function unlocked(n){if(PREVIEW||TEST_MODE)return true;const k=kstParts();if(k.year>2026)return true;if(k.year<2026||k.month<12)return false;if(k.year===2026&&k.month===12)return k.day>n||(k.day===n&&k.hour>=8);return false;}
 function todayNumber(){const k=kstParts();return k.year===2026&&k.month===12&&k.day>=1&&k.day<=25?k.day:0;}
 function nextCountdown(){const k=kstParts();let nextDay;if(k.year<2026||(k.year===2026&&k.month<12))nextDay=1;else if(k.year===2026&&k.month===12&&k.day<=25)nextDay=k.hour<8?k.day:k.day+1;else nextDay=26;if(nextDay>25)return null;const target=Date.parse(`2026-12-${String(nextDay).padStart(2,'0')}T08:00:00+09:00`);const ms=Math.max(0,target-Date.now()),d=Math.floor(ms/86400000),h=Math.floor(ms%86400000/3600000),m=Math.floor(ms%3600000/60000);return{n:nextDay,label:d>0?`${d}일 ${h}시간`:`${h}시간 ${m}분`};}
 function updateUI(){
  const count=gifts.filter(g=>unlocked(g.n)).length,done=gifts.filter(g=>record(g.n)).length,current=todayNumber(),next=nextCountdown();
- $('previewBanner').classList.toggle('show',PREVIEW);
+ $('previewBanner').classList.toggle('show',PREVIEW||TEST_MODE);
  if(PREVIEW)$('previewBanner').innerHTML='✦ 미리보기 모드 — 25일 전체를 체험할 수 있어요. 이 모드에서는 <b>서버로 제출하지 않고 이 브라우저에만 저장</b>합니다. 실제 공개 때 주소의 <b>?preview=1</b>을 제거하세요.';
+ if(TEST_MODE)$('previewBanner').innerHTML='🧪 <b>Firebase 실전 테스트</b> · 25일 모두 공개 · 글/투표/퀴즈를 <b>실제 Firestore 테스트 컬렉션</b>에 저장합니다. 행사 데이터와 분리되어요. 승인된 Google 계정만 참여할 수 있습니다. '+(serverReady?'<button class="small-action" id="resetTestData" type="button">내 테스트 기록 초기화 ↺</button>':'');
  $('calendarGrid').innerHTML=gifts.map(g=>{const open=unlocked(g.n),isToday=current===g.n&&open,done=!!record(g.n),cls=['tile',open?'':'locked',isToday?'today':'',done?'done':''].filter(Boolean).join(' ');return `<button type="button" class="${cls}" data-day="${g.n}" aria-label="12월 ${g.n}일 ${open?(done?'참여 완료':'선물 열기'):'아직 열리지 않음'}"><span class="daynum">${g.n}</span><span class="art" aria-hidden="true">${g.icon}</span><small>${open?escapeHtml(g.short):'???'}</small>${!open?'<span class="lock-icon" aria-hidden="true">🔒</span>':''}${done?'<span class="done-marker" aria-hidden="true">✓</span>':''}</button>`}).join('');
  $('progressTitle').textContent=count===25?'25개의 선물이 모두 열렸어요!':count===0?'우리의 이야기가 곧 시작돼요':`${count}개의 선물 공개 · 나의 참여 ${done}개`;
  $('progressCount').textContent=`${count} / 25 OPEN`;$('progressFill').style.width=`${count/25*100}%`;
  document.querySelector('.progress-bar').setAttribute('aria-valuenow',String(count));
  let lead,title,sub,btn,handler;
- if(PREVIEW){lead='✶ 전체 미리보기 모드';title='25개의 작은 선물 모두 체험하기';sub='어떤 날짜든 눌러 콘텐츠를 확인할 수 있어요.';btn='캘린더 둘러보기 →';handler=scrollCalendar;}
+ if(TEST_MODE){lead='🧪 FIREBASE TEST MODE';title='모든 날짜의 실제 저장을 검사해요';sub='투표·퀴즈·글쓰기까지 별도 테스트 데이터베이스 공간에 저장돼요.';btn='테스트 시작하기 →';handler=scrollCalendar;}
+ else if(PREVIEW){lead='✶ 전체 미리보기 모드';title='25개의 작은 선물 모두 체험하기';sub='어떤 날짜든 눌러 콘텐츠를 확인할 수 있어요.';btn='캘린더 둘러보기 →';handler=scrollCalendar;}
  else if(current&&unlocked(current)){lead=`DECEMBER ${current} · TODAY'S GIFT`;title='오늘의 선물이 도착했어요!';sub=`${gifts[current-1].title} — 오늘의 칸을 열어 보세요.`;btn=`${current}일의 선물 열기 →`;handler=()=>openGift(current);}
  else if(count===25){lead='MERRY CHRISTMAS';title='우리의 12월이 완성됐어요';sub=`나의 참여 기록 ${done}개 · 언제든 다시 살펴볼 수 있어요.`;btn='마지막 선물 열기 →';handler=()=>openGift(25);}
  else if(next){lead='COMING SOON · 08:00 KST';title=`첫 번째 선물까지 ${next.label}`;sub=`12월 ${next.n}일 오전 8시에 다음 선물이 열려요. 기대해 주세요!`;btn='캘린더 구경하기 →';handler=scrollCalendar;}
@@ -223,7 +233,7 @@ async function loadStories(day){
  if(DEMO){target.innerHTML='<div class="empty-state">체험 모드에서는 다른 사람의 글을 볼 수 없어요. Firebase 연결 후에 팀원들의 공개 이야기가 모여요.</div>';return;}
  if(!serverReady){target.innerHTML='<div class="empty-state">서버가 연결되지 않았어요.</div>';return;}
  try{
-  const q=fb.query(fb.collection(db,'publicStories',String(day),'posts'),fb.orderBy('updatedAt','desc'),fb.limit(80));
+  const q=fb.query(fb.collection(db,STORY_ROOT,String(day),'posts'),fb.orderBy('updatedAt','desc'),fb.limit(80));
   const snap=await fb.getDocs(q);
   if(!dialog.open||currentOpenDay!==day||!$('sharedArea'))return;
   const data=snap.docs.map(d=>d.data());
@@ -240,7 +250,7 @@ async function loadPoll(day){
  if(!serverReady){area.innerHTML='<div class="empty-state">서버가 연결되지 않았어요.</div>';return;}
  if(record(day)?.choice===undefined){area.innerHTML='<div class="empty-state">먼저 투표해 주세요.</div>';return;}
  try{
-  const votes=fb.collection(db,'polls',String(day),'votes');
+  const votes=fb.collection(db,POLL_ROOT,String(day),'votes');
   // Aggregations transmit only counts, never other participants' individual choices.
   const snapshots=await Promise.all([0,1,2,3].map(i=>fb.getCountFromServer(fb.query(votes,fb.where('choice','==',i)))));
   if(!dialog.open||currentOpenDay!==day||!$('pollArea'))return;
@@ -253,7 +263,7 @@ async function loadPoll(day){
 }
 function openGift(n){
  if(!unlocked(n)){showLocked(n);return;}
- if(!DEMO&&!serverReady){if(hasGoogleLogin()&&!activeProfile){showProfileForm();return;}showDialog(`<div class="modal-head"><button class="close" id="modalClose">×</button><h2 id="modalTitle" class="modal-title">로그인 후 참여하기</h2></div><div class="modal-body"><p class="prompt">퀴즈·투표·모든 답변은 관리자에게 작성자 정보와 함께 저장돼요.</p><button id="modalGoogle" class="primary">Google 계정으로 로그인</button></div>`);$('modalGoogle').onclick=async()=>{dialog.close();await googleLogin();};return;}
+ if(!DEMO&&!serverReady){if(TEST_MODE&&hasGoogleLogin()&&!testEnabled){showDialog(`<div class="modal-head"><button class="close" id="modalClose">×</button><h2 id="modalTitle" class="modal-title">테스트 권한이 필요해요</h2></div><div class="modal-body"><p class="prompt">관리자에게 Google 계정 UID를 보내고 Firestore testers 컬렉션에 추가해 달라고 해 주세요.</p><button class="primary" id="dismissGift">확인</button></div>`);wireDismiss();return;} if(hasGoogleLogin()&&!activeProfile){showProfileForm();return;}showDialog(`<div class="modal-head"><button class="close" id="modalClose">×</button><h2 id="modalTitle" class="modal-title">로그인 후 참여하기</h2></div><div class="modal-body"><p class="prompt">퀴즈·투표·모든 답변은 관리자에게 작성자 정보와 함께 저장돼요.</p><button id="modalGoogle" class="primary">Google 계정으로 로그인</button></div>`);$('modalGoogle').onclick=async()=>{dialog.close();await googleLogin();};return;}
  currentOpenDay=n;
  const g=gifts[n-1],saved=record(n);let inner=`<p class="prompt">${escapeHtml(g.question)}</p>`;
  if(g.kind==='write'){
@@ -350,12 +360,12 @@ async function openAdmin(){
   while(true){
    const constraints=[fb.limit(200)];if(cursor)constraints.push(fb.startAfter(cursor));
    const snap=await fb.getDocs(fb.query(fb.collectionGroup(db,'days'),...constraints));
-   snap.forEach(d=>{const uid=d.ref.parent.parent?.id;adminEntries.push({day:d.id,uid,data:d.data()});});
+   snap.forEach(d=>{const root=d.ref.parent.parent?.parent?.id;if(root!==PRIVATE_ROOT)return;const uid=d.ref.parent.parent?.id;adminEntries.push({day:d.id,uid,data:d.data()});});
    page++;$('adminStatus').textContent=`${adminEntries.length}건 불러옴…`;
    if(snap.size<200)break;
    cursor=snap.docs[snap.docs.length-1];
   }
-  $('adminStatus').textContent=`전체 ${adminEntries.length}건 불러왔어요. 이 화면은 관리자에게만 열립니다.`;
+  $('adminStatus').textContent=`${TEST_MODE?'테스트':'행사'} 기록 ${adminEntries.length}건 불러왔어요. 이 화면은 관리자에게만 열립니다.`;
   adminRows();
  }catch(e){$('adminStatus').textContent='조회 오류: '+e.message+' (Firestore Rules 및 관리자 UID를 확인해 주세요.)';console.error(e);}
 }
@@ -373,9 +383,24 @@ $('adminExport').onclick=()=>{
  });
  const csv='\ufeff'+[head,...rows].map(row=>row.map(csvCell).join(',')).join('\r\n');
  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement('a');
- a.href=url;a.download='우리들의_12월_관리자기록_'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(url);
+ a.href=url;a.download='우리들의_12월_'+(TEST_MODE?'테스트기록_':'관리자기록_')+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(url);
 };
 
+async function resetOwnTestRecords(){
+ if(!TEST_MODE||DEMO||!serverReady||!testEnabled||!user)return;
+ if(!confirm('내 테스트 기록을 전부 초기화할까요? 테스트 퀴즈·투표·공개 글이 삭제됩니다. 다른 참가자의 기록은 유지돼요.'))return;
+ try{
+  const batch=fb.writeBatch(db);let count=0;
+  for(const g of gifts){const n=g.n;if(n>24||!record(n))continue;
+   batch.delete(ownPath(n));count++;
+   if(g.kind==='write'&&n!==22){batch.delete(storyPath(n));count++;}
+   if(g.kind==='poll'){batch.delete(votePath(n));count++;}
+  }
+  if(count){await batch.commit();state={};updateUI();}
+  showToast(count?'내 테스트 기록이 초기화됐어요.':'지울 테스트 기록이 없어요.');
+ }catch(e){showError(e);}
+}
+$('previewBanner').addEventListener('click',e=>{if(e.target.closest('#resetTestData'))resetOwnTestRecords();});
 updateAccountUI();updateUI();initDatabase();setInterval(updateUI,60000);
 setInterval(()=>{const n=currentOpenDay;if(n&&dialog.open&&serverReady){const kind=gifts[n-1]?.kind;if(kind==='write'&&n!==22)loadStories(n);if(kind==='poll'&&record(n))loadPoll(n);}},25000);
 })();
