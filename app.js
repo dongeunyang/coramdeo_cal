@@ -75,15 +75,19 @@ function hasGoogleLogin(){return !!(user && !user.isAnonymous && user.providerDa
 function updateAccountUI(){
  const btn=$('accountBtn'),admin=$('adminBtn'),name=$('memberName'),panel=$('identityPanel');
  if(!btn||!panel)return;
- if(DEMO){btn.textContent='체험 모드';btn.disabled=true;admin.hidden=true;panel.innerHTML='🎄 <b>미리보기 모드</b>에서는 Google 로그인이나 서버 저장 없이 25일의 콘텐츠를 체험할 수 있어요.';return;}
+ if(DEMO){btn.textContent='체험 모드';btn.disabled=true;admin.hidden=true;name.hidden=true;panel.innerHTML='🎄 <b>미리보기</b>에서는 로그인이나 서버 저장 없이 콘텐츠를 체험할 수 있어요.';return;}
  btn.disabled=!authAPI;
- if(!hasGoogleLogin()){
-  btn.textContent='Google 로그인';admin.hidden=true;name.hidden=true;
-  panel.innerHTML='<b>👋 찬양팀원 여러분!</b> 참여하려면 Google 로그인 후 이름을 등록해 주세요. <strong>모든 제출 내용(퀴즈 답, 투표, 비공개 글·기도문 포함)과 작성자 이름·Google 이메일은 관리자에게 보입니다.</strong> 다른 일반 참가자는 공개 동의한 글과 투표 집계만 볼 수 있어요.';
- }else{
-  btn.textContent='로그아웃';name.hidden=false;name.textContent=(activeProfile?.name||'이름 등록 필요')+'님';admin.hidden=!adminEnabled;admin.textContent=TEST_MODE?'테스트 관리자 📋':'관리자 📋';
-  panel.innerHTML=(TEST_MODE?'<b>🧪 실제 Firebase 테스트 모드</b> · 테스트 기록은 행사 기록과 분리되고 승인된 사람만 참여할 수 있습니다. ':'')+'<b>🔐 기록 안내:</b> 관리자에게는 <strong>모든 퀴즈 선택·정답 여부, 투표 선택, 글·기도문·미션, 작성자 이름·Google 이메일</strong>이 보여요. 일반 팀원에게는 공개 동의한 글만 표시됩니다.';
- }
+ btn.textContent=hasGoogleLogin()?'Google 계정 종료':'관리자 Google 로그인';
+ admin.hidden=!(serverReady&&adminEnabled&&hasGoogleLogin());
+ admin.textContent=TEST_MODE?'테스트 관리자 📋':'관리자 📋';
+ name.hidden=!(activeProfile?.name);
+ if(activeProfile?.name) name.textContent=activeProfile.name+'님';
+ const intro=activeProfile?.name
+   ? ('<b>👋 '+escapeHtml(activeProfile.name)+'님, 환영해요!</b> · '+(hasGoogleLogin()?'Google 계정으로 참여 중':'이름만으로 참여 중'))
+   : '<b>👋 찬양팀 여러분!</b> 별도의 Google 로그인 없이 이름만 등록하면 참여할 수 있어요.';
+ const privacy=' <strong>관리자는 퀴즈 답변·투표·비공개 글과 기도문을 포함한 모든 기록 및 등록 이름을 확인할 수 있어요.</strong> Google 로그인 참가자의 경우 계정 이메일도 관리자에게 표시돼요.';
+ const note=' 이름만 등록한 경우 같은 브라우저에서 기록이 유지되지만, 기기를 바꾸거나 브라우저 데이터를 지우면 복구되지 않을 수 있어요. 이름은 본인 확인 수단이 아니에요.';
+ panel.innerHTML=(TEST_MODE?'<b>🧪 Firebase 실전 테스트</b> · 행사 데이터와 분리해 저장해요. ':'')+intro+privacy+note;
 }
 async function initDatabase(){
  if(DEMO){setStatus(PREVIEW?'미리보기 · 데이터는 이 브라우저에만 저장됩니다':'체험 모드 · Firebase 정보가 필요합니다','demo');updateAccountUI();updateUI();return;}
@@ -91,48 +95,51 @@ async function initDatabase(){
   const [a,b,c]=await Promise.all([import(SDK+'firebase-app.js'),import(SDK+'firebase-auth.js'),import(SDK+'firebase-firestore.js')]);
   fb={...c};authAPI=b;
   const app=a.initializeApp(config);auth=b.getAuth(app);db=c.getFirestore(app);
-  await auth.authStateReady();user=auth.currentUser;
-  if(hasGoogleLogin())await loadAccount();
-  else{serverReady=false;setStatus('Google 로그인 후 이름을 등록해 주세요','demo');}
-  updateAccountUI();updateUI();
- }catch(err){serverReady=false;setStatus('Firebase 연결 실패 · 설정을 확인해 주세요','error');updateAccountUI();showToast('연결 실패: '+(err.message||'알 수 없는 오류'));console.error(err);}
+  await auth.authStateReady();
+  if(!auth.currentUser) await b.signInAnonymously(auth);
+  user=auth.currentUser;
+  await loadAccount();updateAccountUI();updateUI();
+ }catch(err){serverReady=false;setStatus('Firebase 연결 실패 · 익명 인증 및 설정을 확인해 주세요','error');updateAccountUI();showToast('연결 실패: '+(err.message||'알 수 없는 오류'));console.error(err);}
 }
 async function googleLogin(){
  if(!authAPI||!auth||DEMO)return;
- const button=$('accountBtn');button.disabled=true;button.textContent='로그인 중…';
+ const button=$('accountBtn');button.disabled=true;button.textContent='Google 로그인 중…';
  try{
+  // Sign into the existing Google admin UID. Do NOT link the anonymous UID;
+  // linking would change the administrator identity and break admins/<UID>.
+  if(auth.currentUser?.isAnonymous && (activeProfile?.name || Object.keys(state).length) &&
+     !confirm('관리자 Google 계정으로 전환하면 현재 이름 참가 계정과 연결이 끊길 수 있어요. 기존 데이터는 삭제되지 않지만 원래 계정으로 돌아가기 어려울 수 있습니다. 관리자 로그인은 다른 브라우저 사용을 권장해요. 그래도 계속할까요?')) return;
   const provider=new authAPI.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});
-  if(auth.currentUser?.isAnonymous){
-   try{await authAPI.linkWithPopup(auth.currentUser,provider);}
-   catch(e){
-    if(['auth/credential-already-in-use','auth/email-already-in-use','auth/provider-already-linked'].includes(e.code)){
-     // A pre-existing Google account cannot be linked to a new anonymous UID.
-     if(!confirm('이 Google 계정은 이미 다른 사용자로 등록되어 있어요. 이 계정으로 로그인하면 현재 브라우저의 예전 익명 기록은 새 계정에 합쳐지지 않습니다. 계속할까요?'))return;
-     await authAPI.signInWithPopup(auth,provider);
-    }else throw e;
-   }
-  }else await authAPI.signInWithPopup(auth,provider);
-  user=auth.currentUser;await loadAccount();
+  await authAPI.signInWithPopup(auth,provider);
+  user=auth.currentUser;state={};await loadAccount();
  }catch(e){showToast('Google 로그인 실패: '+(e.message||e.code||'알 수 없는 오류'));console.error(e);}
  finally{updateAccountUI();}
 }
 async function signOutAccount(){
  if(!authAPI||!auth)return;
- await authAPI.signOut(auth);user=null;activeProfile=null;serverReady=false;adminEnabled=false;testEnabled=false;state={};
- setStatus('Google 로그인 후 참여할 수 있어요','demo');updateAccountUI();updateUI();showToast('로그아웃했어요.');
+ await authAPI.signOut(auth);
+ user=null;activeProfile=null;serverReady=false;adminEnabled=false;testEnabled=false;state={};
+ await authAPI.signInAnonymously(auth);user=auth.currentUser;
+ await loadAccount();updateAccountUI();updateUI();
+ showToast('이름으로 참여하는 화면으로 전환했어요.');
 }
 async function loadAccount(){
- if(!hasGoogleLogin()){serverReady=false;updateAccountUI();return;}
- activeProfile=null;serverReady=false;adminEnabled=false;testEnabled=false;
+ if(!user){serverReady=false;setStatus('Firebase 인증 중…');updateAccountUI();return;}
+ activeProfile=null;serverReady=false;adminEnabled=false;testEnabled=false;state={};
  try{
   const prof=await fb.getDoc(fb.doc(db,'profiles',user.uid));if(prof.exists())activeProfile=prof.data();
-  const adminRef=await fb.getDoc(fb.doc(db,'admins',user.uid));adminEnabled=adminRef.exists()&&adminRef.data().enabled===true;
-  if(TEST_MODE){const testerRef=await fb.getDoc(fb.doc(db,'testers',user.uid));testEnabled=adminEnabled||(testerRef.exists()&&testerRef.data().enabled===true);
-   if(!testEnabled){setStatus('테스트 권한이 없습니다 · admins 또는 testers 등록 필요','error');updateAccountUI();updateUI();return;}
+  if(hasGoogleLogin()){
+   const adminRef=await fb.getDoc(fb.doc(db,'admins',user.uid));
+   adminEnabled=adminRef.exists()&&adminRef.data().enabled===true;
   }
-  if(!activeProfile){setStatus('이름 등록을 완료해 주세요','demo');updateAccountUI();updateUI();showProfileForm();return;}
-  await loadMyEntries();
-  serverReady=true;setStatus((TEST_MODE?'🧪 Firebase 테스트 연결됨 · ':'Firebase 연결됨 · ')+activeProfile.name+'님으로 참여 중','online');
+  if(TEST_MODE){
+   if(adminEnabled)testEnabled=true;
+   else{const testerRef=await fb.getDoc(fb.doc(db,'testers',user.uid));testEnabled=testerRef.exists()&&testerRef.data().enabled===true;}
+   if(!testEnabled){setStatus('테스트 권한이 없습니다 · 내 UID: '+user.uid,'error');updateAccountUI();updateUI();return;}
+  }
+  if(!activeProfile){setStatus('이름 등록 후 시작할 수 있어요','demo');updateAccountUI();updateUI();showProfileForm();return;}
+  await loadMyEntries();serverReady=true;
+  setStatus((TEST_MODE?'🧪 Firebase 테스트 연결됨 · ':'Firebase 연결됨 · ')+activeProfile.name+'님으로 참여 중','online');
  }catch(e){serverReady=false;setStatus('데이터베이스 연결 오류 · 규칙을 확인해 주세요','error');showToast(e.message);console.error(e);}
  updateAccountUI();updateUI();
 }
@@ -141,16 +148,17 @@ async function loadMyEntries(){
  state={};snap.forEach(d=>{const n=Number(d.id);if(n>=1&&n<=24)state[n]=fromServer(d.data());});
 }
 function showProfileForm(){
- if(!hasGoogleLogin())return;
- const email=escapeHtml(user.email||'');
- showDialog(`<div class="modal-head"><button class="close" id="modalClose" aria-label="닫기">×</button><div class="modal-day">WELCOME · CORAM DEO</div><div class="modal-emoji">🌟</div><h2 id="modalTitle" class="modal-title">팀원 이름 등록</h2><p class="modal-tagline">처음 한 번만 입력하면 돼요</p></div><div class="modal-body"><p class="prompt">관리자가 누가 참여했는지 확인할 수 있도록 찬양팀에서 사용하는 <b>이름</b>을 입력해 주세요.</p><label for="profileName" class="profile-label">이름 (2~30자)</label><input id="profileName" class="profile-input" maxlength="30" placeholder="예: 김하린" value="${escapeHtml(user.displayName||'')}"><p class="identity-email">Google 계정: ${email}</p><label class="profile-consent"><input id="profileConsent" type="checkbox"><span><b>확인했습니다.</b> 관리자에게는 모든 퀴즈·투표·체크·미션 결과, 공개/비공개 글과 기도문 및 작성자 이름·이메일이 표시됩니다. 일반 참가자에게는 공개 동의한 글만 보입니다.</span></label><div class="form-actions"><button class="primary" id="saveProfile">이름 등록하고 시작하기</button><button class="outlined" id="dismissGift">나중에 하기</button></div><p class="form-error" id="formError" role="alert"></p></div>`);
+ if(DEMO||!user)return;
+ const google=hasGoogleLogin();
+ const accountHint=google?'<p class="identity-email">관리자 Google 계정: '+escapeHtml(user.email||'')+'</p>':
+  '<p class="identity-email">Google 로그인 없이 참여합니다. 이 브라우저에 연결된 이름 계정으로 저장돼요. <b>다른 휴대전화에서 같은 이름을 입력해도 같은 계정이 되지는 않아요.</b></p>';
+ showDialog(`<div class="modal-head"><button class="close" id="modalClose" aria-label="닫기">×</button><div class="modal-day">WELCOME · CORAM DEO</div><div class="modal-emoji">🌟</div><h2 id="modalTitle" class="modal-title">이름만 등록하고 시작하기</h2><p class="modal-tagline">팀원들은 Google 로그인이 필요 없어요</p></div><div class="modal-body"><p class="prompt">찬양팀에서 사용하는 이름을 입력해 주세요.</p><label for="profileName" class="profile-label">이름 (2~30자)</label><input id="profileName" class="profile-input" maxlength="30" placeholder="예: 김하린" value="${escapeHtml(user.displayName||'')}">${accountHint}<label class="profile-consent"><input id="profileConsent" type="checkbox"><span><b>확인했습니다.</b> 관리자는 이름과 모든 제출 내용(퀴즈, 투표, 비공개 글·기도문 포함)을 확인합니다. Google 로그인 계정은 이메일도 관리자에게 보입니다. 다른 팀원은 공개한 글과 투표 집계만 볼 수 있습니다. 이름 등록은 본인 인증이 아니며 브라우저를 초기화하면 기록이 사라질 수 있습니다.</span></label><div class="form-actions"><button class="primary" id="saveProfile">이름 등록하고 시작하기</button><button class="outlined" id="dismissGift">나중에 하기</button></div><p class="form-error" id="formError" role="alert"></p></div>`);
  wireDismiss();
  $('saveProfile').onclick=()=>submitWithButton($('saveProfile'),async()=>{
    const name=$('profileName').value.trim();
    if(name.length<2||name.length>30)throw new Error('이름은 2~30자로 입력해 주세요.');
-   if(!$('profileConsent').checked)throw new Error('개인정보 안내를 확인하고 동의해 주세요.');
-   if(!user.email)throw new Error('Google 이메일을 확인할 수 없어요.');
-   const data={name,email:user.email,consented:true,updatedAt:fb.serverTimestamp()};
+   if(!$('profileConsent').checked)throw new Error('참여 기록 안내를 확인하고 동의해 주세요.');
+   const data={name,email:google?(user.email||null):null,consented:true,updatedAt:fb.serverTimestamp()};
    await fb.setDoc(fb.doc(db,'profiles',user.uid),data);await loadAccount();
  },()=>{if(serverReady)dialog.close();});
 }
@@ -158,7 +166,7 @@ $('accountBtn').addEventListener('click',()=>{if(hasGoogleLogin())signOutAccount
 $('adminBtn').addEventListener('click',()=>openAdmin());
 async function save(n,value){
  if(DEMO){state[n]={...value,savedAt:Date.now()};try{localStorage.setItem(STORE,JSON.stringify(state));}catch{}updateUI();return;}
- if(!serverReady||!fb||!user||!activeProfile)throw new Error('Google 로그인과 이름 등록을 먼저 완료해 주세요.');
+ if(!serverReady||!fb||!user||!activeProfile)throw new Error('이름 등록을 먼저 완료해 주세요.');
  if(!unlocked(n)||n<1||n>24)throw new Error('아직 공개되지 않은 날짜예요.');
  const data={
    kind:value.type,
@@ -168,7 +176,7 @@ async function save(n,value){
    mission:value.type==='mission'?value.mission:null,
    displayName:value.type==='write'?(value.displayName||'익명'):'익명',
    shared:value.type==='write'&&n!==22&&!!value.shared,
-   authorUid:user.uid,authorName:activeProfile.name,authorEmail:user.email,
+   authorUid:user.uid,authorName:activeProfile.name,authorEmail:hasGoogleLogin()?(user.email||null):null,
    updatedAt:fb.serverTimestamp()
  };
  const batch=fb.writeBatch(db);
@@ -183,7 +191,7 @@ async function save(n,value){
 }
 async function erase(n){
  if(DEMO){delete state[n];try{localStorage.setItem(STORE,JSON.stringify(state));}catch{}updateUI();return;}
- if(!serverReady||!fb||!user||!activeProfile)throw new Error('Google 로그인과 이름 등록이 필요해요.');
+ if(!serverReady||!fb||!user||!activeProfile)throw new Error('이름 등록이 필요해요.');
  const kind=gifts[n-1]?.kind;
  const batch=fb.writeBatch(db);
  batch.delete(ownPath(n));
@@ -200,7 +208,7 @@ function updateUI(){
  const count=gifts.filter(g=>unlocked(g.n)).length,done=gifts.filter(g=>record(g.n)).length,current=todayNumber(),next=nextCountdown();
  $('previewBanner').classList.toggle('show',PREVIEW||TEST_MODE);
  if(PREVIEW)$('previewBanner').innerHTML='✦ 미리보기 모드 — 25일 전체를 체험할 수 있어요. 이 모드에서는 <b>서버로 제출하지 않고 이 브라우저에만 저장</b>합니다. 실제 공개 때 주소의 <b>?preview=1</b>을 제거하세요.';
- if(TEST_MODE)$('previewBanner').innerHTML='🧪 <b>Firebase 실전 테스트</b> · 25일 모두 공개 · 글/투표/퀴즈를 <b>실제 Firestore 테스트 컬렉션</b>에 저장합니다. 행사 데이터와 분리되어요. 승인된 Google 계정만 참여할 수 있습니다. '+(serverReady?'<button class="small-action" id="resetTestData" type="button">내 테스트 기록 초기화 ↺</button>':'');
+ if(TEST_MODE)$('previewBanner').innerHTML='🧪 <b>Firebase 실전 테스트</b> · 25일 모두 공개 · 글/투표/퀴즈를 <b>실제 Firestore 테스트 컬렉션</b>에 저장합니다. 행사 데이터와 분리되어요. 관리자 또는 승인된 테스터만 참여할 수 있습니다. '+(serverReady?'<button class="small-action" id="resetTestData" type="button">내 테스트 기록 초기화 ↺</button>':'');
  $('calendarGrid').innerHTML=gifts.map(g=>{const open=unlocked(g.n),isToday=current===g.n&&open,done=!!record(g.n),cls=['tile',open?'':'locked',isToday?'today':'',done?'done':''].filter(Boolean).join(' ');return `<button type="button" class="${cls}" data-day="${g.n}" aria-label="12월 ${g.n}일 ${open?(done?'참여 완료':'선물 열기'):'아직 열리지 않음'}"><span class="daynum">${g.n}</span><span class="art" aria-hidden="true">${g.icon}</span><small>${open?escapeHtml(g.short):'???'}</small>${!open?'<span class="lock-icon" aria-hidden="true">🔒</span>':''}${done?'<span class="done-marker" aria-hidden="true">✓</span>':''}</button>`}).join('');
  $('progressTitle').textContent=count===25?'25개의 선물이 모두 열렸어요!':count===0?'우리의 이야기가 곧 시작돼요':`${count}개의 선물 공개 · 나의 참여 ${done}개`;
  $('progressCount').textContent=`${count} / 25 OPEN`;$('progressFill').style.width=`${count/25*100}%`;
@@ -227,7 +235,7 @@ function storySection(n){
  if(n===22)return '<p class="feedback neutral">🔒 22일의 기도문은 일반 팀원에게 공개되지 않지만 관리자에게는 작성자·내용이 보여요.</p>';
  return `<section class="community"><div class="utility-row"><h3>📜 함께 나눈 이야기</h3><button class="small-action" id="refreshShared" type="button">새로고침 ↻</button></div><p class="community-desc">공개에 동의한 팀원들의 글만 보입니다. 약 25초마다 자동으로 새로고침돼요.</p><div id="sharedArea" aria-live="polite">불러오는 중...</div></section>`;
 }
-function pollSection(){return `<section class="community"><div class="utility-row"><h3>📊 우리 팀 투표 결과</h3><button class="small-action" id="refreshPoll" type="button">새로고침 ↻</button></div><p class="community-desc">Google 계정당 한 표로 집계돼요. 투표한 사람만 결과를 볼 수 있어요.</p><div id="pollArea" aria-live="polite">집계 중...</div></section>`;}
+function pollSection(){return `<section class="community"><div class="utility-row"><h3>📊 우리 팀 투표 결과</h3><button class="small-action" id="refreshPoll" type="button">새로고침 ↻</button></div><p class="community-desc">등록된 참가자 계정당 한 표로 집계돼요. 투표한 사람만 결과를 볼 수 있어요.</p><div id="pollArea" aria-live="polite">집계 중...</div></section>`;}
 async function loadStories(day){
  const target=$('sharedArea');if(!target||!dialog.open||currentOpenDay!==day)return;
  if(DEMO){target.innerHTML='<div class="empty-state">체험 모드에서는 다른 사람의 글을 볼 수 없어요. Firebase 연결 후에 팀원들의 공개 이야기가 모여요.</div>';return;}
@@ -263,7 +271,11 @@ async function loadPoll(day){
 }
 function openGift(n){
  if(!unlocked(n)){showLocked(n);return;}
- if(!DEMO&&!serverReady){if(TEST_MODE&&hasGoogleLogin()&&!testEnabled){showDialog(`<div class="modal-head"><button class="close" id="modalClose">×</button><h2 id="modalTitle" class="modal-title">테스트 권한이 필요해요</h2></div><div class="modal-body"><p class="prompt">관리자에게 Google 계정 UID를 보내고 Firestore testers 컬렉션에 추가해 달라고 해 주세요.</p><button class="primary" id="dismissGift">확인</button></div>`);wireDismiss();return;} if(hasGoogleLogin()&&!activeProfile){showProfileForm();return;}showDialog(`<div class="modal-head"><button class="close" id="modalClose">×</button><h2 id="modalTitle" class="modal-title">로그인 후 참여하기</h2></div><div class="modal-body"><p class="prompt">퀴즈·투표·모든 답변은 관리자에게 작성자 정보와 함께 저장돼요.</p><button id="modalGoogle" class="primary">Google 계정으로 로그인</button></div>`);$('modalGoogle').onclick=async()=>{dialog.close();await googleLogin();};return;}
+ if(!DEMO&&!serverReady){
+  if(TEST_MODE&&!testEnabled){showDialog(`<div class="modal-head"><button class="close" id="modalClose">×</button><h2 id="modalTitle" class="modal-title">테스트 권한이 필요해요</h2></div><div class="modal-body"><p class="prompt">관리자 Google 계정으로 로그인하거나, Firebase의 testers 컬렉션에 현재 참가자 UID를 추가해 주세요.</p><button class="primary" id="dismissGift">확인</button></div>`);wireDismiss();return;}
+  if(user&&!activeProfile){showProfileForm();return;}
+  showDialog(`<div class="modal-head"><button class="close" id="modalClose">×</button><h2 id="modalTitle" class="modal-title">이름 등록 후 참여하기</h2></div><div class="modal-body"><p class="prompt">퀴즈·투표·모든 제출 기록과 작성자 이름을 관리자가 확인할 수 있어요. 잠시 뒤에도 연결되지 않는다면 새로고침해 주세요.</p><button class="primary" id="dismissGift">확인</button></div>`);wireDismiss();return;
+ }
  currentOpenDay=n;
  const g=gifts[n-1],saved=record(n);let inner=`<p class="prompt">${escapeHtml(g.question)}</p>`;
  if(g.kind==='write'){
@@ -319,7 +331,7 @@ function feedbackQuiz(g,choice){return `<div class="feedback ${choice===g.answer
 $('calendarGrid').addEventListener('click',e=>{const tile=e.target.closest('[data-day]');if(tile)openGift(Number(tile.dataset.day));});
 $('howBtn').addEventListener('click',()=>{
  currentOpenDay=null;
- showDialog(`<div class="modal-head"><button class="close" id="modalClose" aria-label="닫기">×</button><div class="modal-day">HOW TO PLAY</div><div class="modal-emoji">🗓️</div><h2 id="modalTitle" class="modal-title">우리들의 12월 사용법</h2><p class="modal-tagline">딱 1~3분이면 충분해요</p></div><div class="modal-body"><p class="prompt">매일 새로운 칸이 열리는 찬양팀의 작은 연말 이벤트예요.</p><p class="hint">① 12월 1~25일, 매일 오전 8시(한국 시간)에 하나씩 선물이 열려요.<br/>② 날짜를 눌러 퀴즈·투표·짧은 글쓰기에 참여해 보세요.<br/>③ 글쓰기는 기본 비공개예요. <b>팀원들과 공유하기</b>를 체크하면 표시 이름과 글이 웹사이트 방문자에게 보여요.<br/>④ 투표 결과는 투표한 뒤부터 확인할 수 있고 약 25초마다 새로고침돼요.<br/>⑤ 관리자에게는 퀴즈 선택·정답 여부·투표·글·기도문·미션 등 모든 기록과 이름·Google 이메일이 보여요. 일반 팀원에게는 비공개 글과 기도문을 공개하지 않아요.<br/>⑥ 25일에는 내가 남긴 기록을 텍스트 파일로 내려받을 수 있어요.<br/><br/><b>계정 안내:</b> Google 로그인과 최초 1회 이름 등록이 필요해요. 같은 Google 계정으로 다른 기기에서도 내 기록을 이어볼 수 있어요.<br/><br/><b>개인정보 안내:</b> 관리자만 모든 기록과 작성자 이름·Google 이메일을 볼 수 있어요. 공개에 동의한 글은 사이트를 방문하는 사람에게 표시됩니다. 사적인 내용은 신중하게 작성해 주세요.</p><button class="primary" id="dismissGift">시작할게요 ✨</button></div>`);wireDismiss();
+ showDialog(`<div class="modal-head"><button class="close" id="modalClose" aria-label="닫기">×</button><div class="modal-day">HOW TO PLAY</div><div class="modal-emoji">🗓️</div><h2 id="modalTitle" class="modal-title">우리들의 12월 사용법</h2><p class="modal-tagline">딱 1~3분이면 충분해요</p></div><div class="modal-body"><p class="prompt">매일 새로운 칸이 열리는 찬양팀의 작은 연말 이벤트예요.</p><p class="hint">① 12월 1~25일, 매일 오전 8시(한국 시간)에 하나씩 선물이 열려요.<br/>② 날짜를 눌러 퀴즈·투표·짧은 글쓰기에 참여해 보세요.<br/>③ 글쓰기는 기본 비공개예요. <b>팀원들과 공유하기</b>를 체크하면 표시 이름과 글이 웹사이트 방문자에게 보여요.<br/>④ 투표 결과는 투표한 뒤부터 확인할 수 있고 약 25초마다 새로고침돼요.<br/>⑤ 관리자에게는 퀴즈 선택·정답 여부·투표·글·기도문·미션 등 모든 기록과 등록 이름이 보여요. Google 계정은 이메일도 표시돼요. 일반 팀원에게는 비공개 글과 기도문을 공개하지 않아요.<br/>⑥ 25일에는 내가 남긴 기록을 텍스트 파일로 내려받을 수 있어요.<br/><br/><b>계정 안내:</b> 일반 팀원은 이름만 한 번 등록하면 참여할 수 있어요. 브라우저를 변경하거나 데이터를 삭제하면 기록이 이어지지 않을 수 있어요. 관리자는 Google 로그인으로 접속합니다.<br/><br/><b>개인정보 안내:</b> 관리자만 모든 기록과 작성자 이름을 볼 수 있어요. Google 로그인 계정은 이메일도 볼 수 있어요. 공개에 동의한 글은 사이트를 방문하는 사람에게 표시됩니다. 사적인 내용은 신중하게 작성해 주세요.</p><button class="primary" id="dismissGift">시작할게요 ✨</button></div>`);wireDismiss();
 });
 dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close();});
 dialog.addEventListener('close',()=>{currentOpenDay=null;});
@@ -344,7 +356,7 @@ function adminRows(){
  const quizzes=adminFiltered.filter(x=>x.data.kind==='quiz'),correct=quizzes.filter(x=>x.data.choice===gifts[Number(x.day)-1]?.answer).length;
  $('adminStats').innerHTML=`<div><strong>${adminFiltered.length}</strong><span>조회 기록</span></div><div><strong>${new Set(adminFiltered.map(x=>x.uid)).size}</strong><span>참여 계정</span></div><div><strong>${correct} / ${quizzes.length}</strong><span>퀴즈 정답</span></div>`;
  $('adminTableBody').innerHTML=adminFiltered.length?adminFiltered.map(e=>{
-  const d=e.data,g=gifts[Number(e.day)-1],meta=adminProfiles.get(e.uid)||{},name=d.authorName||meta.name||'이전 익명 계정',email=d.authorEmail||meta.email||'이메일 미등록',answer=adminAnswer(e);
+  const d=e.data,g=gifts[Number(e.day)-1],meta=adminProfiles.get(e.uid)||{},name=d.authorName||meta.name||'이전 익명 계정',email=d.authorEmail||meta.email||'이메일 없음 · 이름 참여',answer=adminAnswer(e);
   const date=d.updatedAt?.toDate?.();const dateStr=date?date.toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'—';
   const state=d.kind==='quiz'?(d.choice===g?.answer?'✓ 정답':'✕ 오답'):(d.kind==='write'?(d.shared?'공개':'비공개'):'저장됨');
   return `<tr><td>12/${escapeHtml(e.day)}<br/><small>${escapeHtml(g?.short||'')}</small></td><td><strong>${escapeHtml(name)}</strong><br/><small>${escapeHtml(email)}</small></td><td><span class="record-kind">${escapeHtml(d.kind)}</span> · ${escapeHtml(state)}<br/><span class="record-answer">${escapeHtml(answer)}</span></td><td><small>${escapeHtml(dateStr)}</small></td></tr>`;
@@ -376,7 +388,7 @@ $('adminRefresh').onclick=()=>openAdmin();
 function csvCell(v){let s=String(v??'');if(/^[\s\u0000-\u001F]*[=+@-]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';}
 $('adminExport').onclick=()=>{
  if(!adminEnabled||!serverReady)return;
- const head=['날짜','종류','이름','Google 이메일','UID','제출내용','정오답/공개여부','KST 제출시각'];
+ const head=['날짜','종류','이름','이메일(있으면)','UID','제출내용','정오답/공개여부','KST 제출시각'];
  const rows=adminFiltered.map(e=>{const d=e.data,g=gifts[Number(e.day)-1],meta=adminProfiles.get(e.uid)||{};
   const verdict=d.kind==='quiz'?(d.choice===g?.answer?'정답':'오답'):(d.kind==='write'?(d.shared?'공개':'비공개'):'기록됨');
   return [e.day,d.kind,d.authorName||meta.name||'이전 익명 계정',d.authorEmail||meta.email||'',e.uid,adminAnswer(e),verdict,d.updatedAt?.toDate?.().toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})||''];
