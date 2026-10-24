@@ -45,6 +45,13 @@ button[disabled]{cursor:not-allowed;opacity:.6}
 .utility-row{display:flex;align-items:center;justify-content:space-between;gap:7px;margin:8px 0}.utility-row small{font-size:10px;color:#9a8570}.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:999;background:#182d39;color:#fff9e9;padding:11px 16px;border-radius:12px;font-size:12px;line-height:1.5;box-shadow:0 8px 30px #0006;max-width:calc(100vw - 30px);width:max-content;pointer-events:none}
 .toast[hidden]{display:none}.modal-body .share-choice input{width:auto}
 
+
+/* Member identity & secure administration — illustration style preserved. */
+.identity-panel{margin:0 0 18px;padding:14px 18px;background:#fff7e7;border:1px solid #d7be90;border-left:5px solid #ac6653;border-radius:14px;color:#3e3340;font-size:13px;line-height:1.85;box-shadow:0 6px 20px #050d2040}
+.identity-panel strong{color:#8c332b}.top-right{flex-wrap:wrap;justify-content:flex-end}.chip.admin-action{background:#ffe6bb;color:#433022;border-color:#c89865;font-weight:750}.member-name{font-size:12px;color:#f4e4c8}
+.profile-label{display:block;margin:14px 0 7px;font-weight:700}.profile-input{width:100%;background:#fffef7;color:#342b32;border:1px solid #cebba3;border-radius:12px;padding:13px}.identity-email{font-size:12px;color:#685a55;overflow-wrap:anywhere}.profile-consent{display:flex;align-items:flex-start;gap:12px;margin:18px 0;padding:12px;background:#f5ebdc;border-radius:12px;font-size:12px;line-height:1.75}.profile-consent input{margin-top:5px;transform:scale(1.2)}
+.admin-dialog{max-width:1060px;width:min(1060px,calc(100% - 18px));max-height:94vh}.admin-inner{background:#fff9ed;padding:22px;border-radius:19px}.admin-header{display:flex;align-items:center;justify-content:space-between;gap:10px}.admin-header h2{font-family:'Gaegu',cursive;font-size:37px;margin:0;color:#633e37}.admin-header button{background:transparent;border:0;font-size:28px}.admin-desc{font-size:12px;color:#755f57;line-height:1.65}.admin-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin:15px 0}.admin-stats>div{background:#f4ead5;border-radius:12px;text-align:center;padding:14px 6px}.admin-stats strong{display:block;font-size:22px;color:#ad4d3e}.admin-stats span{font-size:11px;color:#665a51}.admin-controls{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.admin-controls input,.admin-controls select{min-width:0;flex:1 1 130px;border:1px solid #cfbda7;background:#fffdf6;border-radius:10px;padding:9px;font-size:12px}.admin-controls button{border:1px solid #c1a888;color:#48382f;background:#f4e5cd;padding:9px 12px;border-radius:10px;font-size:12px}.admin-table-wrap{overflow:auto;max-height:56vh;border:1px solid #dfd2b7;border-radius:12px}.admin-table{width:100%;border-collapse:collapse;min-width:630px;font-size:12px}.admin-table th{background:#f0dfc2;position:sticky;top:0;text-align:left;color:#4a4039}.admin-table th,.admin-table td{padding:11px 9px;border-bottom:1px solid #e5d9c5;vertical-align:top}.admin-table small{font-size:10px;color:#847468}.record-answer{white-space:pre-wrap;overflow-wrap:anywhere;display:inline-block;max-width:300px;margin-top:4px}.record-kind{font-weight:750;color:#9c473d}.empty-admin{text-align:center;padding:30px!important}.admin-status{font-size:12px;color:#7d634f}
+@media(max-width:520px){.identity-panel{font-size:11px;padding:11px}.member-name{font-size:10px}.admin-inner{padding:13px}.admin-header h2{font-size:29px}.admin-stats strong{font-size:17px}.admin-dialog{max-height:96vh}}
 </style>
 </head>
 <body>
@@ -52,9 +59,10 @@ button[disabled]{cursor:not-allowed;opacity:.6}
 <div class="shell">
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">✶</span> CORAM DEO <span style="color:#bea57e">/</span> CHRISTMAS 2026</div>
-    <div class="top-right"><button class="chip" id="howBtn">이용 방법 <span aria-hidden="true">↗</span></button></div>
+    <div class="top-right"><span class="member-name" id="memberName" hidden></span><button class="chip admin-action" id="adminBtn" hidden>관리자 📋</button><button class="chip" id="accountBtn">Google 로그인</button><button class="chip" id="howBtn">이용 방법 <span aria-hidden="true">↗</span></button></div>
   </header>
   <div class="preview-banner" id="previewBanner">✦ 미리보기 모드 — 모든 날짜를 열어볼 수 있습니다. 실제 공유할 때는 주소의 <b>?preview=1</b>을 제거하세요.</div>
+  <div id="identityPanel" class="identity-panel" role="note">참여자의 모든 제출 내용과 작성자는 관리자에게 공개됩니다.</div>
   <main class="layout">
     <section class="hero" aria-labelledby="hero-title">
       <div class="kicker">✦ &nbsp;A LITTLE GIFT EVERY DAY&nbsp; ✦</div>
@@ -87,7 +95,7 @@ button[disabled]{cursor:not-allowed;opacity:.6}
       <div class="connection-state" data-status="loading" id="connectionState" role="status">Firebase 연결을 확인하는 중...</div>
       <div id="calendarGrid" class="calendar-grid" aria-label="12월 1일부터 25일까지의 선물 캘린더"></div>
       <div class="legend"><span><i class="open-dot"></i>오늘 열린 선물</span><span><i class="done-dot"></i>내가 참여한 날</span><span><i class="locked-dot"></i>아직 잠긴 선물</span></div>
-      <div class="board-bottom"><span class="light" aria-hidden="true">🕯️</span><div>지난 날짜의 선물도 다시 열 수 있어요. Firebase를 연결하면 <b>선택한 감사 글은 함께 읽고</b>, <b>투표에 참여한 뒤 전체 결과</b>를 확인할 수 있어요. 개인 기도문과 비공개 답변은 다른 팀원에게 보이지 않아요.</div></div>
+      <div class="board-bottom"><span class="light" aria-hidden="true">🕯️</span><div>지난 날짜의 선물도 다시 열 수 있어요. Firebase를 연결하면 <b>선택한 감사 글은 함께 읽고</b>, <b>투표에 참여한 뒤 전체 결과</b>를 확인할 수 있어요. 개인 기도문과 비공개 답변은 일반 팀원에게 보이지 않지만 <b>관리자는 작성자와 모든 기록을 확인할 수 있어요.</b></div></div>
       <div class="decor-stamps" aria-hidden="true">❄</div>
     </section>
   </main>
@@ -95,6 +103,14 @@ button[disabled]{cursor:not-allowed;opacity:.6}
 </div>
 <div class="toast" id="toast" hidden role="status"></div>
 <dialog id="giftDialog" class="dialog" aria-labelledby="modalTitle"><div id="modalContent"></div></dialog>
+<dialog id="adminDialog" class="dialog admin-dialog" aria-labelledby="adminTitle"><div class="admin-inner">
+ <header class="admin-header"><h2 id="adminTitle">📋 우리들의 12월 · 관리자</h2><button id="adminClose" aria-label="관리자 창 닫기">×</button></header>
+ <p class="admin-desc">관리자 승인된 Google 계정만 조회할 수 있습니다. 퀴즈, 투표, 글, 기도문, 체크, 미션 모두 포함되며 본인 계정의 기록만 수정할 수 있습니다. 이름은 직접 입력한 값이고 Google 이메일은 로그인 계정에 연결된 값입니다.</p>
+ <p id="adminStatus" class="admin-status">기록을 불러오는 중…</p>
+ <div id="adminStats" class="admin-stats"><div><strong>—</strong><span>조회 기록</span></div><div><strong>—</strong><span>참여 계정</span></div><div><strong>—</strong><span>퀴즈 정답</span></div></div>
+ <div class="admin-controls"><input id="adminSearch" placeholder="이름 · 이메일 · 답변 검색" aria-label="기록 검색"><select id="adminDay" aria-label="날짜 선택"><option value="">전체 날짜</option><option value="1">12월 1일</option><option value="2">12월 2일</option><option value="3">12월 3일</option><option value="4">12월 4일</option><option value="5">12월 5일</option><option value="6">12월 6일</option><option value="7">12월 7일</option><option value="8">12월 8일</option><option value="9">12월 9일</option><option value="10">12월 10일</option><option value="11">12월 11일</option><option value="12">12월 12일</option><option value="13">12월 13일</option><option value="14">12월 14일</option><option value="15">12월 15일</option><option value="16">12월 16일</option><option value="17">12월 17일</option><option value="18">12월 18일</option><option value="19">12월 19일</option><option value="20">12월 20일</option><option value="21">12월 21일</option><option value="22">12월 22일</option><option value="23">12월 23일</option><option value="24">12월 24일</option></select><select id="adminKind" aria-label="유형 선택"><option value="">전체 유형</option><option value="quiz">퀴즈</option><option value="write">글 · 기도</option><option value="poll">투표</option><option value="check">체크</option><option value="mission">미션</option></select><button id="adminRefresh">새로고침</button><button id="adminExport">CSV 다운로드 ↓</button></div>
+ <p class="admin-status" id="adminCount"></p><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>날짜</th><th>작성자</th><th>유형 · 답변 · 결과</th><th>제출 시각</th></tr></thead><tbody id="adminTableBody"></tbody></table></div>
+ </div></dialog>
 <script src="firebase-config.js"></script>
 <script type="module" src="app.js"></script>
 </body>

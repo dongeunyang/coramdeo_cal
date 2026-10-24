@@ -7,7 +7,8 @@ const DEMO = PREVIEW || !configured;
 const STORE = PREVIEW ? 'coram-advent-2026-preview-firebase' : 'coram-advent-2026-local-firebase';
 // Firebase SDK is dynamically imported only in live mode. ?preview=1 works without credentials or network.
 const SDK = 'https://www.gstatic.com/firebasejs/13.1.0/';
-let fb=null, auth=null, db=null;
+let fb=null, auth=null, db=null, authAPI=null, activeProfile=null, adminEnabled=false;
+let adminEntries=[],adminFiltered=[],adminProfiles=new Map();
 const gifts = [
   {n:1,icon:'🎄',kind:'write',short:'첫 감사',title:'12월의 첫 번째 인사',tag:'우리의 따뜻한 시작',question:'올해 찬양팀과 함께하면서 가장 감사했던 순간은 언제였나요?',placeholder:'그날의 장면을 한두 문장으로 남겨 보세요…'},
   {n:2,icon:'🎵',kind:'quiz',short:'음악 퀴즈',title:'첫 번째 음악 퀴즈',tag:'가볍게 풀고 웃어봐요',question:'오선지에는 줄이 몇 개 있을까요?',options:['4개','5개','6개','7개'],answer:1,explain:'맞아요! 오선지는 다섯 개의 줄과 네 개의 칸으로 이루어져 있어요.'},
@@ -30,7 +31,7 @@ const gifts = [
   {n:19,icon:'🏠',kind:'write',short:'첫 만남',title:'처음 이 팀에 왔던 날',tag:'우리가 함께하게 된 시작',question:'처음 찬양팀에 들어왔던 날의 기억이나 당시의 첫인상이 떠오르나요?',placeholder:'낯설었지만 설렜던 순간, 첫 연습의 기억…'},
   {n:20,icon:'🍪',kind:'poll',short:'간식 투표',title:'연말 간식 이상형',tag:'가장 맛있는 선택',question:'연말 모임에 하나만 준비한다면?',options:['케이크 🍰','붕어빵 🐟','치킨 🍗','따뜻한 음료 ☕']},
   {n:21,icon:'🎧',kind:'write',short:'올해의 찬양',title:'2026 나의 찬양 플레이리스트',tag:'마음에 남은 멜로디',question:'올해 가장 사랑했던 찬양 3곡을 적어 주세요. 이유도 함께 남기면 더 좋아요.',placeholder:'1.\n2.\n3.'},
-  {n:22,icon:'🕯️',kind:'write',short:'기도 한 줄',title:'함께 기억할 기도',tag:'조용히 마음을 모으는 날',question:'지금 내 삶과 공동체를 위해 드리고 싶은 짧은 기도를 적어 주세요. 이 내용은 팀원에게 공개되지 않아요.',placeholder:'하나님, ...'},
+  {n:22,icon:'🕯️',kind:'write',short:'기도 한 줄',title:'함께 기억할 기도',tag:'조용히 마음을 모으는 날',question:'지금 내 삶과 공동체를 위해 드리고 싶은 짧은 기도를 적어 주세요. 일반 팀원에게는 공개되지 않지만 관리자에게는 내용과 작성자가 표시됩니다.',placeholder:'하나님, ...'},
   {n:23,icon:'❄️',kind:'check',short:'추억 체크',title:'우리 팀의 작은 기쁨들',tag:'올해의 행복한 장면 찾기',question:'올해 있었던 행복한 순간에 체크해 보세요.',items:['함께한 연습이 즐거웠다','새로운 곡을 완성해 뿌듯했다','팀원에게 위로받았다','누군가에게 작은 도움이 되었다','함께 웃는 시간이 있었다','좋은 예배를 준비할 수 있었다','서로를 더 이해하게 되었다','기억에 남는 사진을 남겼다','내년에도 함께하고 싶은 마음이 생겼다']},
   {n:24,icon:'🌙',kind:'write',short:'성탄 전야',title:'고요한 밤의 감사',tag:'크리스마스 이브의 작은 기도',question:'성탄을 앞두고 올해를 돌아보며 가장 감사한 것 한 가지를 남겨 주세요.',placeholder:'오늘, 특별히 감사한 것은…'},
   {n:25,icon:'🌠',kind:'finale',short:'마지막 선물',title:'우리들의 12월, 마지막 페이지',tag:'메리 크리스마스! 🎄',question:'25일 동안 남긴 나의 이야기들을 한 장의 연말 기록으로 돌아보세요.'}
@@ -65,37 +66,91 @@ function fromServer(r){
 function ownPath(n){return fb.doc(db,'privateEntries',user.uid,'days',String(n));}
 function storyPath(n){return fb.doc(db,'publicStories',String(n),'posts',user.uid);}
 function votePath(n){return fb.doc(db,'polls',String(n),'votes',user.uid);}
-async function initDatabase(){
- if(DEMO){
-  setStatus(PREVIEW ? '미리보기 · 데이터는 이 브라우저에만 저장됩니다' : '체험 모드 · 실시간 공유를 하려면 Firebase 설정이 필요해요','demo');
-  updateUI();return;
- }
- try{
-  const [a,b,c]=await Promise.all([
-    import(SDK+'firebase-app.js'),import(SDK+'firebase-auth.js'),import(SDK+'firebase-firestore.js')
-  ]);
-  fb={...c};
-  const app=a.initializeApp(config);
-  auth=b.getAuth(app); db=c.getFirestore(app);
-  await auth.authStateReady();
-  if(!auth.currentUser)await b.signInAnonymously(auth);
-  user=auth.currentUser;
-  if(!user)throw new Error('익명 인증에 실패했습니다. Firebase Authentication에서 익명 로그인 설정을 확인해 주세요.');
-  const snapshot=await fb.getDocs(fb.collection(db,'privateEntries',user.uid,'days'));
-  state={};snapshot.forEach(item=>{const n=Number(item.id);if(Number.isInteger(n)&&n>=1&&n<=24)state[n]=fromServer(item.data());});
-  serverReady=true;
-  setStatus('Firebase 연결됨 · 공개 글과 투표 결과가 팀원들과 공유됩니다','online');
-  updateUI();
- }catch(err){
-  serverReady=false;
-  setStatus('Firebase 연결 실패 · 설정 및 Firestore 규칙을 확인해 주세요','error');
-  showToast('클라우드 연결 실패: '+(err.message||'알 수 없는 오류'));
-  console.error('Firebase connection:',err);
+function hasGoogleLogin(){return !!(user && !user.isAnonymous && user.providerData?.some(x=>x.providerId==='google.com'));}
+function updateAccountUI(){
+ const btn=$('accountBtn'),admin=$('adminBtn'),name=$('memberName'),panel=$('identityPanel');
+ if(!btn||!panel)return;
+ if(DEMO){btn.textContent='체험 모드';btn.disabled=true;admin.hidden=true;panel.innerHTML='🎄 <b>미리보기 모드</b>에서는 Google 로그인이나 서버 저장 없이 25일의 콘텐츠를 체험할 수 있어요.';return;}
+ btn.disabled=!authAPI;
+ if(!hasGoogleLogin()){
+  btn.textContent='Google 로그인';admin.hidden=true;name.hidden=true;
+  panel.innerHTML='<b>👋 찬양팀원 여러분!</b> 참여하려면 Google 로그인 후 이름을 등록해 주세요. <strong>모든 제출 내용(퀴즈 답, 투표, 비공개 글·기도문 포함)과 작성자 이름·Google 이메일은 관리자에게 보입니다.</strong> 다른 일반 참가자는 공개 동의한 글과 투표 집계만 볼 수 있어요.';
+ }else{
+  btn.textContent='로그아웃';name.hidden=false;name.textContent=(activeProfile?.name||'이름 등록 필요')+'님';admin.hidden=!adminEnabled;
+  panel.innerHTML='<b>🔐 기록 안내:</b> 관리자에게는 <strong>모든 퀴즈 선택·정답 여부, 투표 선택, 글·기도문·미션, 작성자 이름·Google 이메일</strong>이 보여요. 일반 팀원에게는 공개 동의한 글만 표시됩니다.';
  }
 }
+async function initDatabase(){
+ if(DEMO){setStatus(PREVIEW?'미리보기 · 데이터는 이 브라우저에만 저장됩니다':'체험 모드 · Firebase 정보가 필요합니다','demo');updateAccountUI();updateUI();return;}
+ try{
+  const [a,b,c]=await Promise.all([import(SDK+'firebase-app.js'),import(SDK+'firebase-auth.js'),import(SDK+'firebase-firestore.js')]);
+  fb={...c};authAPI=b;
+  const app=a.initializeApp(config);auth=b.getAuth(app);db=c.getFirestore(app);
+  await auth.authStateReady();user=auth.currentUser;
+  if(hasGoogleLogin())await loadAccount();
+  else{serverReady=false;setStatus('Google 로그인 후 이름을 등록해 주세요','demo');}
+  updateAccountUI();updateUI();
+ }catch(err){serverReady=false;setStatus('Firebase 연결 실패 · 설정을 확인해 주세요','error');updateAccountUI();showToast('연결 실패: '+(err.message||'알 수 없는 오류'));console.error(err);}
+}
+async function googleLogin(){
+ if(!authAPI||!auth||DEMO)return;
+ const button=$('accountBtn');button.disabled=true;button.textContent='로그인 중…';
+ try{
+  const provider=new authAPI.GoogleAuthProvider();provider.setCustomParameters({prompt:'select_account'});
+  if(auth.currentUser?.isAnonymous){
+   try{await authAPI.linkWithPopup(auth.currentUser,provider);}
+   catch(e){
+    if(['auth/credential-already-in-use','auth/email-already-in-use','auth/provider-already-linked'].includes(e.code)){
+     // A pre-existing Google account cannot be linked to a new anonymous UID.
+     if(!confirm('이 Google 계정은 이미 다른 사용자로 등록되어 있어요. 이 계정으로 로그인하면 현재 브라우저의 예전 익명 기록은 새 계정에 합쳐지지 않습니다. 계속할까요?'))return;
+     await authAPI.signInWithPopup(auth,provider);
+    }else throw e;
+   }
+  }else await authAPI.signInWithPopup(auth,provider);
+  user=auth.currentUser;await loadAccount();
+ }catch(e){showToast('Google 로그인 실패: '+(e.message||e.code||'알 수 없는 오류'));console.error(e);}
+ finally{updateAccountUI();}
+}
+async function signOutAccount(){
+ if(!authAPI||!auth)return;
+ await authAPI.signOut(auth);user=null;activeProfile=null;serverReady=false;adminEnabled=false;state={};
+ setStatus('Google 로그인 후 참여할 수 있어요','demo');updateAccountUI();updateUI();showToast('로그아웃했어요.');
+}
+async function loadAccount(){
+ if(!hasGoogleLogin()){serverReady=false;updateAccountUI();return;}
+ activeProfile=null;serverReady=false;adminEnabled=false;
+ try{
+  const prof=await fb.getDoc(fb.doc(db,'profiles',user.uid));if(prof.exists())activeProfile=prof.data();
+  const adminRef=await fb.getDoc(fb.doc(db,'admins',user.uid));adminEnabled=adminRef.exists()&&adminRef.data().enabled===true;
+  if(!activeProfile){setStatus('이름 등록을 완료해 주세요','demo');updateAccountUI();updateUI();showProfileForm();return;}
+  await loadMyEntries();
+  serverReady=true;setStatus('Firebase 연결됨 · '+activeProfile.name+'님으로 참여 중','online');
+ }catch(e){serverReady=false;setStatus('데이터베이스 연결 오류 · 규칙을 확인해 주세요','error');showToast(e.message);console.error(e);}
+ updateAccountUI();updateUI();
+}
+async function loadMyEntries(){
+ const snap=await fb.getDocs(fb.collection(db,'privateEntries',user.uid,'days'));
+ state={};snap.forEach(d=>{const n=Number(d.id);if(n>=1&&n<=24)state[n]=fromServer(d.data());});
+}
+function showProfileForm(){
+ if(!hasGoogleLogin())return;
+ const email=escapeHtml(user.email||'');
+ showDialog(`<div class="modal-head"><button class="close" id="modalClose" aria-label="닫기">×</button><div class="modal-day">WELCOME · CORAM DEO</div><div class="modal-emoji">🌟</div><h2 id="modalTitle" class="modal-title">팀원 이름 등록</h2><p class="modal-tagline">처음 한 번만 입력하면 돼요</p></div><div class="modal-body"><p class="prompt">관리자가 누가 참여했는지 확인할 수 있도록 찬양팀에서 사용하는 <b>이름</b>을 입력해 주세요.</p><label for="profileName" class="profile-label">이름 (2~30자)</label><input id="profileName" class="profile-input" maxlength="30" placeholder="예: 김하린" value="${escapeHtml(user.displayName||'')}"><p class="identity-email">Google 계정: ${email}</p><label class="profile-consent"><input id="profileConsent" type="checkbox"><span><b>확인했습니다.</b> 관리자에게는 모든 퀴즈·투표·체크·미션 결과, 공개/비공개 글과 기도문 및 작성자 이름·이메일이 표시됩니다. 일반 참가자에게는 공개 동의한 글만 보입니다.</span></label><div class="form-actions"><button class="primary" id="saveProfile">이름 등록하고 시작하기</button><button class="outlined" id="dismissGift">나중에 하기</button></div><p class="form-error" id="formError" role="alert"></p></div>`);
+ wireDismiss();
+ $('saveProfile').onclick=()=>submitWithButton($('saveProfile'),async()=>{
+   const name=$('profileName').value.trim();
+   if(name.length<2||name.length>30)throw new Error('이름은 2~30자로 입력해 주세요.');
+   if(!$('profileConsent').checked)throw new Error('개인정보 안내를 확인하고 동의해 주세요.');
+   if(!user.email)throw new Error('Google 이메일을 확인할 수 없어요.');
+   const data={name,email:user.email,consented:true,updatedAt:fb.serverTimestamp()};
+   await fb.setDoc(fb.doc(db,'profiles',user.uid),data);await loadAccount();
+ },()=>{if(serverReady)dialog.close();});
+}
+$('accountBtn').addEventListener('click',()=>{if(hasGoogleLogin())signOutAccount().catch(showError);else googleLogin();});
+$('adminBtn').addEventListener('click',()=>openAdmin());
 async function save(n,value){
  if(DEMO){state[n]={...value,savedAt:Date.now()};try{localStorage.setItem(STORE,JSON.stringify(state));}catch{}updateUI();return;}
- if(!serverReady||!fb||!user)throw new Error('Firebase 서버에 연결되지 않았어요. 새로고침 후 다시 시도해 주세요.');
+ if(!serverReady||!fb||!user||!activeProfile)throw new Error('Google 로그인과 이름 등록을 먼저 완료해 주세요.');
  if(!unlocked(n)||n<1||n>24)throw new Error('아직 공개되지 않은 날짜예요.');
  const data={
    kind:value.type,
@@ -105,6 +160,7 @@ async function save(n,value){
    mission:value.type==='mission'?value.mission:null,
    displayName:value.type==='write'?(value.displayName||'익명'):'익명',
    shared:value.type==='write'&&n!==22&&!!value.shared,
+   authorUid:user.uid,authorName:activeProfile.name,authorEmail:user.email,
    updatedAt:fb.serverTimestamp()
  };
  const batch=fb.writeBatch(db);
@@ -119,7 +175,7 @@ async function save(n,value){
 }
 async function erase(n){
  if(DEMO){delete state[n];try{localStorage.setItem(STORE,JSON.stringify(state));}catch{}updateUI();return;}
- if(!serverReady||!fb||!user)throw new Error('Firebase 연결을 확인해 주세요.');
+ if(!serverReady||!fb||!user||!activeProfile)throw new Error('Google 로그인과 이름 등록이 필요해요.');
  const kind=gifts[n-1]?.kind;
  const batch=fb.writeBatch(db);
  batch.delete(ownPath(n));
@@ -158,10 +214,10 @@ function showError(err){const message=err?.message||String(err)||'알 수 없는
 async function submitWithButton(button,task,after){if(!button)return;button.disabled=true;const old=button.textContent;button.textContent='저장하는 중…';try{await task();showToast(DEMO?'이 기기에 저장했어요':'클라우드에 저장했어요');if(after)after();}catch(e){showError(e);}finally{button.disabled=false;button.textContent=old;}}
 function showLocked(n){showDialog(`<div class="modal-head"><button class="close" id="modalClose" aria-label="닫기">×</button><div class="modal-day">DECEMBER ${String(n).padStart(2,'0')}</div><div class="modal-emoji">🔒</div><h2 class="modal-title" id="modalTitle">아직 비밀이에요!</h2><p class="modal-tagline">조금만 더 기대해 주세요 ♡</p></div><div class="modal-body"><p class="prompt">이 선물은 12월 ${n}일 오전 8시(KST)에 열려요.</p><button class="primary" id="dismissGift">알겠어요</button></div>`);wireDismiss();}
 function storySection(n){
- if(n===22)return '<p class="feedback neutral">🔒 22일의 기도문은 서버에 비공개 저장하며 팀원에게 공개하지 않아요.</p>';
+ if(n===22)return '<p class="feedback neutral">🔒 22일의 기도문은 일반 팀원에게 공개되지 않지만 관리자에게는 작성자·내용이 보여요.</p>';
  return `<section class="community"><div class="utility-row"><h3>📜 함께 나눈 이야기</h3><button class="small-action" id="refreshShared" type="button">새로고침 ↻</button></div><p class="community-desc">공개에 동의한 팀원들의 글만 보입니다. 약 25초마다 자동으로 새로고침돼요.</p><div id="sharedArea" aria-live="polite">불러오는 중...</div></section>`;
 }
-function pollSection(){return `<section class="community"><div class="utility-row"><h3>📊 우리 팀 투표 결과</h3><button class="small-action" id="refreshPoll" type="button">새로고침 ↻</button></div><p class="community-desc">한 기기·브라우저의 익명 계정당 한 표로 집계돼요. 투표한 사람만 결과를 볼 수 있어요.</p><div id="pollArea" aria-live="polite">집계 중...</div></section>`;}
+function pollSection(){return `<section class="community"><div class="utility-row"><h3>📊 우리 팀 투표 결과</h3><button class="small-action" id="refreshPoll" type="button">새로고침 ↻</button></div><p class="community-desc">Google 계정당 한 표로 집계돼요. 투표한 사람만 결과를 볼 수 있어요.</p><div id="pollArea" aria-live="polite">집계 중...</div></section>`;}
 async function loadStories(day){
  const target=$('sharedArea');if(!target||!dialog.open||currentOpenDay!==day)return;
  if(DEMO){target.innerHTML='<div class="empty-state">체험 모드에서는 다른 사람의 글을 볼 수 없어요. Firebase 연결 후에 팀원들의 공개 이야기가 모여요.</div>';return;}
@@ -196,14 +252,16 @@ async function loadPoll(day){
  }catch(e){if($('pollArea'))$('pollArea').innerHTML=`<p class="form-error">투표 결과를 불러오지 못했어요: ${escapeHtml(e.message)}</p>`;}
 }
 function openGift(n){
- if(!unlocked(n)){showLocked(n);return;}currentOpenDay=n;
+ if(!unlocked(n)){showLocked(n);return;}
+ if(!DEMO&&!serverReady){if(hasGoogleLogin()&&!activeProfile){showProfileForm();return;}showDialog(`<div class="modal-head"><button class="close" id="modalClose">×</button><h2 id="modalTitle" class="modal-title">로그인 후 참여하기</h2></div><div class="modal-body"><p class="prompt">퀴즈·투표·모든 답변은 관리자에게 작성자 정보와 함께 저장돼요.</p><button id="modalGoogle" class="primary">Google 계정으로 로그인</button></div>`);$('modalGoogle').onclick=async()=>{dialog.close();await googleLogin();};return;}
+ currentOpenDay=n;
  const g=gifts[n-1],saved=record(n);let inner=`<p class="prompt">${escapeHtml(g.question)}</p>`;
  if(g.kind==='write'){
   const shareable=n!==22;
   inner+=`<textarea id="writeAnswer" aria-label="오늘의 이야기" maxlength="1200" placeholder="${escapeHtml(g.placeholder)}">${escapeHtml(saved?.text||'')}</textarea>`;
   if(shareable){
-   inner+=`<div class="share-config"><label for="displayName">표시할 이름 (실명 대신 별명도 가능)</label><input type="text" id="displayName" maxlength="20" placeholder="예: 익명의 코람데오" value="${escapeHtml(saved?.displayName||nickname)}"><label class="share-choice"><input id="sharePublic" type="checkbox" ${saved?.shared?'checked':''}><span><strong>이 글을 찬양팀과 공유하기</strong><br/>체크한 경우에만 다른 방문자에게 글과 표시 이름이 보여요.</span></label><div class="share-caption">체크하지 않으면 나만 볼 수 있는 비공개 답변으로 저장돼요. 공유한 내용은 웹사이트에 접근하는 사람이 볼 수 있습니다.</div></div>`;
-  }else inner+='<div class="feedback neutral">이날 작성한 기도는 비공개로 저장됩니다. 팀원들에게 공개되지 않아요.</div>';
+   inner+=`<div class="share-config"><label for="displayName">표시할 이름 (실명 대신 별명도 가능)</label><input type="text" id="displayName" maxlength="20" placeholder="예: 익명의 코람데오" value="${escapeHtml(saved?.displayName||nickname)}"><label class="share-choice"><input id="sharePublic" type="checkbox" ${saved?.shared?'checked':''}><span><strong>이 글을 찬양팀과 공유하기</strong><br/>체크한 경우에만 다른 방문자에게 글과 표시 이름이 보여요.</span></label><div class="share-caption">체크하지 않으면 일반 팀원에게만 비공개예요. <b>관리자는 모든 글과 작성자 정보를 볼 수 있어요.</b> 공개한 내용은 사이트 방문자도 볼 수 있습니다.</div></div>`;
+  }else inner+='<div class="feedback neutral">이날 작성한 기도는 일반 팀원에게 비공개지만 <b>관리자는 작성자와 기도문을 볼 수 있어요.</b></div>';
   inner+=saved?'<div class="result-pill">✓ 저장한 답변을 불러왔어요</div>':'';
   inner+=buttonSave(saved?'수정한 내용 저장하기':'내 이야기 저장하기');
   if(saved)inner+='<button type="button" class="small-action" id="deleteGift">내 답변 삭제하기</button>';
@@ -215,9 +273,9 @@ function openGift(n){
   if(saved)$('deleteGift').onclick=async()=>{if(!confirm('작성한 답변을 삭제할까요? 공개한 글도 함께 사라져요.'))return;const btn=$('deleteGift');await submitWithButton(btn,()=>erase(n),()=>openGift(n));};
   if(shareable){$('refreshShared').onclick=()=>loadStories(n);loadStories(n);}
  }else if(g.kind==='quiz'){
-  inner+=`<div class="choices">${g.options.map((t,i)=>`<button class="choice ${saved?.choice===i?'selected':''}" data-choice="${i}"><span class="circle">${saved?.choice===i?'✓':''}</span>${escapeHtml(t)}</button>`).join('')}</div><div id="quizFeedback">${saved?.choice!==undefined?feedbackQuiz(g,saved.choice):'<p class="hint">선택하면 정답과 간단한 해설이 나와요. 선택은 비공개 저장돼요.</p>'}</div>`;
+  inner+=`<div class="choices">${g.options.map((t,i)=>`<button class="choice ${saved?.choice===i?'selected':''}" data-choice="${i}" ${saved?.choice!==undefined?'disabled':''}><span class="circle">${saved?.choice===i?'✓':''}</span>${escapeHtml(t)}</button>`).join('')}</div><div id="quizFeedback">${saved?.choice!==undefined?feedbackQuiz(g,saved.choice):'<p class="hint">한 번 제출하면 정답을 바꿀 수 없어요. 관리자는 누가 맞혔는지 확인할 수 있어요.</p>'}</div>`;
   showDialog(baseModal(g,inner));
-  document.querySelectorAll('[data-choice]').forEach(x=>x.onclick=()=>submitWithButton(x,()=>save(n,{type:'quiz',choice:Number(x.dataset.choice)}),()=>openGift(n)));
+  if(saved?.choice===undefined)document.querySelectorAll('[data-choice]').forEach(x=>x.onclick=()=>submitWithButton(x,()=>save(n,{type:'quiz',choice:Number(x.dataset.choice)}),()=>openGift(n)));
  }else if(g.kind==='poll'){
   inner+=`<div class="choices">${g.options.map((t,i)=>`<button class="choice ${saved?.choice===i?'selected':''}" data-choice="${i}"><span class="circle">${saved?.choice===i?'✓':''}</span>${escapeHtml(t)}</button>`).join('')}</div>${saved?.choice!==undefined?'<div class="feedback">✦ 선택이 저장됐어요. 다시 선택하면 내 한 표가 바뀌어요.</div>':'<p class="hint">하나를 선택하고 전체 투표 결과를 확인하세요.</p>'}`;
   if(saved?.choice!==undefined)inner+=pollSection();
@@ -251,10 +309,73 @@ function feedbackQuiz(g,choice){return `<div class="feedback ${choice===g.answer
 $('calendarGrid').addEventListener('click',e=>{const tile=e.target.closest('[data-day]');if(tile)openGift(Number(tile.dataset.day));});
 $('howBtn').addEventListener('click',()=>{
  currentOpenDay=null;
- showDialog(`<div class="modal-head"><button class="close" id="modalClose" aria-label="닫기">×</button><div class="modal-day">HOW TO PLAY</div><div class="modal-emoji">🗓️</div><h2 id="modalTitle" class="modal-title">우리들의 12월 사용법</h2><p class="modal-tagline">딱 1~3분이면 충분해요</p></div><div class="modal-body"><p class="prompt">매일 새로운 칸이 열리는 찬양팀의 작은 연말 이벤트예요.</p><p class="hint">① 12월 1~25일, 매일 오전 8시(한국 시간)에 하나씩 선물이 열려요.<br/>② 날짜를 눌러 퀴즈·투표·짧은 글쓰기에 참여해 보세요.<br/>③ 글쓰기는 기본 비공개예요. <b>팀원들과 공유하기</b>를 체크하면 표시 이름과 글이 웹사이트 방문자에게 보여요.<br/>④ 투표 결과는 투표한 뒤부터 확인할 수 있고 약 25초마다 새로고침돼요.<br/>⑤ 개인 기도문과 퀴즈 선택은 다른 팀원에게 공개되지 않아요.<br/>⑥ 25일에는 내가 남긴 기록을 텍스트 파일로 내려받을 수 있어요.<br/><br/><b>계정 안내:</b> 별도 회원가입 없이 브라우저별 익명 계정을 만들어요. 다른 기기나 브라우저에서는 다른 사람으로 집계돼요. 브라우저 데이터를 지우면 내 익명 계정에 다시 접근하지 못할 수 있어요.<br/><br/><b>개인정보 안내:</b> 클라우드 연결 시 비공개 답변도 Firebase Firestore에 저장되지만 다른 일반 참가자에게 보여주지 않아요. 공개한 글은 사이트를 방문하는 누구나 볼 수 있으므로 개인적이거나 민감한 내용은 공유하지 마세요.</p><button class="primary" id="dismissGift">시작할게요 ✨</button></div>`);wireDismiss();
+ showDialog(`<div class="modal-head"><button class="close" id="modalClose" aria-label="닫기">×</button><div class="modal-day">HOW TO PLAY</div><div class="modal-emoji">🗓️</div><h2 id="modalTitle" class="modal-title">우리들의 12월 사용법</h2><p class="modal-tagline">딱 1~3분이면 충분해요</p></div><div class="modal-body"><p class="prompt">매일 새로운 칸이 열리는 찬양팀의 작은 연말 이벤트예요.</p><p class="hint">① 12월 1~25일, 매일 오전 8시(한국 시간)에 하나씩 선물이 열려요.<br/>② 날짜를 눌러 퀴즈·투표·짧은 글쓰기에 참여해 보세요.<br/>③ 글쓰기는 기본 비공개예요. <b>팀원들과 공유하기</b>를 체크하면 표시 이름과 글이 웹사이트 방문자에게 보여요.<br/>④ 투표 결과는 투표한 뒤부터 확인할 수 있고 약 25초마다 새로고침돼요.<br/>⑤ 관리자에게는 퀴즈 선택·정답 여부·투표·글·기도문·미션 등 모든 기록과 이름·Google 이메일이 보여요. 일반 팀원에게는 비공개 글과 기도문을 공개하지 않아요.<br/>⑥ 25일에는 내가 남긴 기록을 텍스트 파일로 내려받을 수 있어요.<br/><br/><b>계정 안내:</b> Google 로그인과 최초 1회 이름 등록이 필요해요. 같은 Google 계정으로 다른 기기에서도 내 기록을 이어볼 수 있어요.<br/><br/><b>개인정보 안내:</b> 관리자만 모든 기록과 작성자 이름·Google 이메일을 볼 수 있어요. 공개에 동의한 글은 사이트를 방문하는 사람에게 표시됩니다. 사적인 내용은 신중하게 작성해 주세요.</p><button class="primary" id="dismissGift">시작할게요 ✨</button></div>`);wireDismiss();
 });
 dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close();});
 dialog.addEventListener('close',()=>{currentOpenDay=null;});
-updateUI();initDatabase();setInterval(updateUI,60000);
+
+const adminDialog=$('adminDialog');
+function adminAnswer(d){
+ const n=Number(d.day),g=gifts[n-1],v=d.data;
+ if(!g)return '(알 수 없는 날짜)';
+ if(v.kind==='write')return v.answerText||'';
+ if(v.kind==='quiz'||v.kind==='poll')return g.options?.[v.choice]||'(응답 없음)';
+ if(v.kind==='check')return (v.checked||[]).map(i=>g.items?.[i]).filter(Boolean).join(' · ');
+ if(v.kind==='mission')return g.missions?.[v.mission]||'';
+ return '';
+}
+function adminRows(){
+ const search=$('adminSearch')?.value.trim().toLowerCase()||'',day=$('adminDay')?.value||'',kind=$('adminKind')?.value||'';
+ adminFiltered=adminEntries.filter(e=>{
+  const d=e.data,meta=adminProfiles.get(e.uid)||{},name=d.authorName||meta.name||'이전 익명 계정',email=d.authorEmail||meta.email||'';
+  return (!day||e.day===day)&&(!kind||d.kind===kind)&&(!search||[name,email,adminAnswer(e),e.day,String(e.uid)].some(x=>String(x).toLowerCase().includes(search)));
+ });
+ adminFiltered.sort((a,b)=>(b.data.updatedAt?.toMillis?.()||0)-(a.data.updatedAt?.toMillis?.()||0));
+ const quizzes=adminFiltered.filter(x=>x.data.kind==='quiz'),correct=quizzes.filter(x=>x.data.choice===gifts[Number(x.day)-1]?.answer).length;
+ $('adminStats').innerHTML=`<div><strong>${adminFiltered.length}</strong><span>조회 기록</span></div><div><strong>${new Set(adminFiltered.map(x=>x.uid)).size}</strong><span>참여 계정</span></div><div><strong>${correct} / ${quizzes.length}</strong><span>퀴즈 정답</span></div>`;
+ $('adminTableBody').innerHTML=adminFiltered.length?adminFiltered.map(e=>{
+  const d=e.data,g=gifts[Number(e.day)-1],meta=adminProfiles.get(e.uid)||{},name=d.authorName||meta.name||'이전 익명 계정',email=d.authorEmail||meta.email||'이메일 미등록',answer=adminAnswer(e);
+  const date=d.updatedAt?.toDate?.();const dateStr=date?date.toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'—';
+  const state=d.kind==='quiz'?(d.choice===g?.answer?'✓ 정답':'✕ 오답'):(d.kind==='write'?(d.shared?'공개':'비공개'):'저장됨');
+  return `<tr><td>12/${escapeHtml(e.day)}<br/><small>${escapeHtml(g?.short||'')}</small></td><td><strong>${escapeHtml(name)}</strong><br/><small>${escapeHtml(email)}</small></td><td><span class="record-kind">${escapeHtml(d.kind)}</span> · ${escapeHtml(state)}<br/><span class="record-answer">${escapeHtml(answer)}</span></td><td><small>${escapeHtml(dateStr)}</small></td></tr>`;
+ }).join(''):'<tr><td colspan="4" class="empty-admin">조건에 맞는 기록이 없어요.</td></tr>';
+ $('adminCount').textContent=`총 ${adminFiltered.length}건 표시`;
+}
+async function openAdmin(){
+ if(DEMO||!serverReady||!adminEnabled||!hasGoogleLogin()){showToast('관리자 전용 기능이에요.');return;}
+ if(!adminDialog.open)adminDialog.showModal();$('adminStatus').textContent='기록을 안전하게 불러오는 중…';$('adminTableBody').innerHTML='';
+ try{
+  const profiles=await fb.getDocs(fb.collection(db,'profiles'));adminProfiles=new Map();profiles.forEach(doc=>adminProfiles.set(doc.id,doc.data()));
+  adminEntries=[];let cursor=null;let page=0;
+  while(true){
+   const constraints=[fb.limit(200)];if(cursor)constraints.push(fb.startAfter(cursor));
+   const snap=await fb.getDocs(fb.query(fb.collectionGroup(db,'days'),...constraints));
+   snap.forEach(d=>{const uid=d.ref.parent.parent?.id;adminEntries.push({day:d.id,uid,data:d.data()});});
+   page++;$('adminStatus').textContent=`${adminEntries.length}건 불러옴…`;
+   if(snap.size<200)break;
+   cursor=snap.docs[snap.docs.length-1];
+  }
+  $('adminStatus').textContent=`전체 ${adminEntries.length}건 불러왔어요. 이 화면은 관리자에게만 열립니다.`;
+  adminRows();
+ }catch(e){$('adminStatus').textContent='조회 오류: '+e.message+' (Firestore Rules 및 관리자 UID를 확인해 주세요.)';console.error(e);}
+}
+$('adminClose').onclick=()=>adminDialog.close();
+adminDialog.addEventListener('click',e=>{if(e.target===adminDialog)adminDialog.close();});
+['adminSearch','adminDay','adminKind'].forEach(id=>$(id).addEventListener(id==='adminSearch'?'input':'change',adminRows));
+$('adminRefresh').onclick=()=>openAdmin();
+function csvCell(v){let s=String(v??'');if(/^[\s\u0000-\u001F]*[=+@-]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';}
+$('adminExport').onclick=()=>{
+ if(!adminEnabled||!serverReady)return;
+ const head=['날짜','종류','이름','Google 이메일','UID','제출내용','정오답/공개여부','KST 제출시각'];
+ const rows=adminFiltered.map(e=>{const d=e.data,g=gifts[Number(e.day)-1],meta=adminProfiles.get(e.uid)||{};
+  const verdict=d.kind==='quiz'?(d.choice===g?.answer?'정답':'오답'):(d.kind==='write'?(d.shared?'공개':'비공개'):'기록됨');
+  return [e.day,d.kind,d.authorName||meta.name||'이전 익명 계정',d.authorEmail||meta.email||'',e.uid,adminAnswer(e),verdict,d.updatedAt?.toDate?.().toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})||''];
+ });
+ const csv='\ufeff'+[head,...rows].map(row=>row.map(csvCell).join(',')).join('\r\n');
+ const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+ a.href=url;a.download='우리들의_12월_관리자기록_'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(url);
+};
+
+updateAccountUI();updateUI();initDatabase();setInterval(updateUI,60000);
 setInterval(()=>{const n=currentOpenDay;if(n&&dialog.open&&serverReady){const kind=gifts[n-1]?.kind;if(kind==='write'&&n!==22)loadStories(n);if(kind==='poll'&&record(n))loadPoll(n);}},25000);
 })();
